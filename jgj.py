@@ -1,16 +1,17 @@
 import logging
 import random
 import os
-from dotenv import load_dotenv
-from flask import Flask, request
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
+from dotenv import load_dotenv
+from flask import Flask
 
-# Load environment variables from the .env file
 load_dotenv()
 
 # Enable logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                    level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # List of jokes categorized
@@ -32,9 +33,6 @@ jokes = {
     ]
 }
 
-# Flask application
-app = Flask(__name__)
-
 # Command /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
@@ -49,13 +47,16 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     category = query.data
     if category == 'add_joke':
+        # Request user to enter a new joke
         await query.answer()
         await query.edit_message_text("Ти хочеш поділитись своїм жартом? Напиши його тут!")
         return
     elif category == 'start_jokes':
+        # Send the joke categories for the user to choose from
         await show_joke_categories(update, context)
         return
     elif category in ['programmers', 'animals', 'mood']:
+        # Send a random joke from the selected category
         await show_random_joke(update, context)
         return
 
@@ -82,6 +83,7 @@ async def show_random_joke(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     rating_markup = InlineKeyboardMarkup(rating_keyboard)
     
+    # Send the joke along with rating options
     await query.answer()  # Acknowledge the button click
     await query.edit_message_text(text=selected_joke, reply_markup=rating_markup)  # Update the message with the joke
 
@@ -91,6 +93,7 @@ async def rate_joke(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rating = query.data.split("_")[2]  # Extract rating (thumb_up or thumb_down)
     category = query.data.split("_")[1]  # Extract category (programmers, animals, mood)
     
+    # Send acknowledgment of the rating
     if rating == "thumb_up":
         await query.edit_message_text(text="Дякую за твою оцінку! Раді, що сподобалось! 🥳")
     else:
@@ -99,6 +102,7 @@ async def rate_joke(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Handle user input for new jokes
 async def handle_joke_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text
+    # Ask the user to select the category
     keyboard = [
         [InlineKeyboardButton("Програмісти 👨‍💻", callback_data='programmers')],
         [InlineKeyboardButton("Тварини 🐾", callback_data='animals')],
@@ -106,6 +110,8 @@ async def handle_joke_submission(update: Update, context: ContextTypes.DEFAULT_T
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("Оберіть категорію для свого жарту, щоб я міг його додати:", reply_markup=reply_markup)
+    
+    # Save the user's joke temporarily until category is selected
     context.user_data['new_joke'] = user_message
 
 # Handle category selection for new jokes
@@ -114,36 +120,43 @@ async def handle_category_selection(update: Update, context: ContextTypes.DEFAUL
     new_joke = context.user_data.get('new_joke', None)
     
     if new_joke:
+        # Add the joke to the selected category
         jokes[category].append(new_joke)
         await update.callback_query.answer()
         await update.callback_query.edit_message_text(f"Готово! Твій жарт успішно додано до категорії '{category}'! 👍")
+        # Clear the stored new joke after adding it
         del context.user_data['new_joke']
     else:
         await update.callback_query.answer()
         await update.callback_query.edit_message_text("Щось пішло не так. Спробуй знову. 😔")
 
-# Create and configure the Flask web server
-@app.route('/')
-def index():
-    return "Bot is running!"
-
-# Start the bot with long polling
+# Main function
 def main():
-    BOT_TOKEN = os.getenv('token')  # Your bot token
+    """Start the bot."""
+    BOT_TOKEN = os.getenv('token')  # Replace with your token
     application = Application.builder().token(BOT_TOKEN).build()
 
+    # Set up the asyncio event loop properly before calling `run_polling`
+    asyncio.set_event_loop(asyncio.new_event_loop())  # Ensure event loop is created
+    
+    # Add /start command handler
     application.add_handler(CommandHandler("start", start))
+    
+    # Add button handler for when a user clicks a category
     application.add_handler(CallbackQueryHandler(button, pattern="^(programmers|animals|mood|add_joke|start_jokes)$"))
+    
+    # Add handler for rating submissions
     application.add_handler(CallbackQueryHandler(rate_joke, pattern="^rate_"))
+    
+    # Add handler for joke submissions
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_joke_submission))
+
+    # Add handler for category selection for new jokes
     application.add_handler(CallbackQueryHandler(handle_category_selection, pattern="^(programmers|animals|mood)$"))
 
-    # Start polling in a non-blocking way
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Start polling for updates
+    print("Бот запущено! Починаємо веселитися! 🎉")
+    application.run_polling()
 
 if __name__ == '__main__':
-    # Run the bot and Flask server on Render
-    from threading import Thread
-    thread = Thread(target=main)
-    thread.start()
-    app.run(host='0.0.0.0', port=int(os.getenv("PORT", 5000)))
+    main()
